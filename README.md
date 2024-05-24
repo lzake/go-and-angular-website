@@ -16,7 +16,7 @@ This project showcases a user management system built with Go for the backend an
 ![User Creation Error](./create_error.PNG)
 
 ### User Editing Error
-![User Editing Error](./edit.error.PNG)
+![User Editing Error](./edit_error.PNG)
 
 ## Getting Started
 
