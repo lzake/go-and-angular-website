@@ -10,6 +10,14 @@ This project showcases a user management system built with Go for the backend an
 - **User Editing**: Update existing user details.
 - **User Deletion**: Remove users from the system.
 
+## Error Handling
+
+### User Creation Error
+![User Creation Error](./create_error.PNG)
+
+### User Editing Error
+![User Editing Error](./edit_error.PNG)
+
 ## Getting Started
 
 ### Prerequisites
