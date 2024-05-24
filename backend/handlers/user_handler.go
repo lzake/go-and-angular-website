@@ -61,7 +61,7 @@ func (h *UserHandler) CreateUser(c echo.Context) error {
 
 	result := h.DB.Create(&user)
 	if result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to create user in the database"})
+		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to create user"})
 	}
 
 	return c.JSON(http.StatusCreated, user)

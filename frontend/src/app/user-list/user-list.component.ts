@@ -1,9 +1,9 @@
 import { Component, OnInit } from '@angular/core';
 import { UserService } from '../user.service';
 import { User } from '../user';
-import { MatDialog } from '@angular/material/dialog'; 
+import { MatDialog } from '@angular/material/dialog';
 import { UserCreateComponent } from '../user-create/user-create.component';
-import { UserEditComponent } from '../user-edit/user-edit.component'; 
+import { UserEditComponent } from '../user-edit/user-edit.component';
 import { UserDeleteComponent } from '../user-delete/user-delete.component';
 
 @Component({
@@ -16,9 +16,9 @@ export class UserListComponent implements OnInit {
   displayedColumns: string[] = ['id', 'username', 'email', 'actions'];
 
   constructor(
-    public dialog: MatDialog, 
+    public dialog: MatDialog,
     private userService: UserService
-  ) {}
+  ) { }
 
   ngOnInit(): void {
     this.getUsers();
@@ -33,8 +33,10 @@ export class UserListComponent implements OnInit {
     const dialogRef = this.dialog.open(UserCreateComponent);
 
     dialogRef.afterClosed().subscribe(result => {
-      if (result) { 
-        this.userService.createUser(result).subscribe(() => this.getUsers());
+      if (result) {
+        this.userService.createUser(result).subscribe(() => {
+          this.getUsers();
+        });
       }
     });
   }
@@ -57,8 +59,8 @@ export class UserListComponent implements OnInit {
     });
 
     dialogRef.afterClosed().subscribe(result => {
-      if (result) { 
-        this.userService.deleteUser(id).subscribe(() => this.getUsers()); 
+      if (result) {
+        this.userService.deleteUser(id).subscribe(() => this.getUsers());
       }
     });
   }
