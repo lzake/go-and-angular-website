@@ -16,7 +16,7 @@ This project showcases a user management system built with Go for the backend an
 ![User Creation Error](./create_error.PNG)
 
 ### User Editing Error
-![User Editing Error](./edit_error.PNG)
+![User Editing Error](./edit.error.PNG)
 
 ## Getting Started
 
@@ -25,6 +25,7 @@ This project showcases a user management system built with Go for the backend an
 - [Go](https://golang.org/doc/install)
 - [Node.js](https://nodejs.org/)
 - [Angular CLI](https://angular.io/cli)
+- PostgreSQL version 10 or higher
   - other libraries:
     - Material components - https://material.angular.io/
     - Angular testing: Jasmine and Karma
@@ -38,11 +39,27 @@ This project showcases a user management system built with Go for the backend an
     ```sh
     cd backend
     ```
-2. Install dependencies:
+2. Create a `config.json` file with the following contents:
+    ```json
+    {
+      "database": {
+        "host": "localhost",
+        "user": "YOUR_USER",
+        "password": "YOUR_PASSWORD",
+        "dbname": "YOUR_DATABASE",
+        "port": 5432,
+        "sslmode": "disable"
+      },
+      "app": {
+        "timezone": "America/New_York"
+      }
+    }
+    ```
+3. Install dependencies:
     ```sh
     go get ./...
     ```
-3. Run the server:
+4. Run the server:
     ```sh
     go run main.go
     ```
