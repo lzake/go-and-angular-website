@@ -1,0 +1,8 @@
+# Ignore node_modules in frontend directory
+frontend/node_modules/
+
+# Ignore Visual Studio Code settings in frontend directory
+frontend/.vscode/
+
+# Ignore Angular-specific files in frontend directory
+frontend/.angular/
