@@ -13,7 +13,7 @@ import { UserDeleteComponent } from '../user-delete/user-delete.component';
 })
 export class UserListComponent implements OnInit {
   users: User[] = [];
-  displayedColumns: string[] = ['id', 'username', 'email', 'actions'];
+  displayedColumns: string[] = ['ID', 'username', 'email', 'actions'];
 
   constructor(
     public dialog: MatDialog,
@@ -48,7 +48,7 @@ export class UserListComponent implements OnInit {
 
     dialogRef.afterClosed().subscribe(result => {
       if (result) {
-        this.userService.updateUser(result).subscribe(() => this.getUsers());
+        this.userService.updateUser(result, result.id).subscribe(() => this.getUsers());
       }
     });
   }

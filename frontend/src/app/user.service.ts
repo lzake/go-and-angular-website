@@ -20,8 +20,8 @@ export class UserService {
       );
   }
 
-  getUser(id: number): Observable<User> {
-    const url = `${this.apiUrl}/${id}`;
+  getUser(ID: number): Observable<User> {
+    const url = `${this.apiUrl}/${ID}`;
     return this.http.get<User>(url).pipe(
       retry(3),
       catchError(this.handleError)
@@ -34,8 +34,8 @@ export class UserService {
     );
   }
 
-  updateUser(user: User): Observable<User> {
-    const url = `${this.apiUrl}/${user.id}`;
+  updateUser(user: User, id: number ): Observable<User> {
+    const url = `${this.apiUrl}/${id}`;
     return this.http.put<User>(url, user);
   }
 
