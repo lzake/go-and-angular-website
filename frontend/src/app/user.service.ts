@@ -34,10 +34,13 @@ export class UserService {
     );
   }
 
-  updateUser(user: User, id: number ): Observable<User> {
+  updateUser(user: User, id: number): Observable<User> {
     const url = `${this.apiUrl}/${id}`;
-    return this.http.put<User>(url, user);
+    return this.http.put<User>(url, user).pipe(
+      catchError(this.handleError)
+    );
   }
+  
 
   deleteUser(id: number): Observable<unknown> {
     const url = `${this.apiUrl}/${id}`;

@@ -3,7 +3,7 @@
   <div mat-dialog-content>
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Username</mat-label>
-      <input matInput type="text" formControlName="username" required>
+      <input matInput type="text" formControlName="username" required />
       <mat-error *ngIf="userForm.get('username')!.hasError('required')">
         Username is required
       </mat-error>
@@ -11,7 +11,7 @@
 
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Email</mat-label>
-      <input matInput type="email" formControlName="email" required>
+      <input matInput type="email" formControlName="email" required />
       <mat-error *ngIf="userForm.get('email')!.hasError('required')">
         Email is required
       </mat-error>
@@ -19,10 +19,21 @@
         Please enter a valid email address
       </mat-error>
     </mat-form-field>
+
+    <mat-error *ngIf="errorMessage">
+      {{ errorMessage }}
+    </mat-error>
   </div>
 
   <div mat-dialog-actions>
     <button mat-button (click)="onCancel()">Cancel</button>
-    <button mat-raised-button color="primary" type="submit" [disabled]="userForm.invalid">Save</button>
+    <button
+      mat-raised-button
+      color="primary"
+      type="submit"
+      [disabled]="userForm.invalid"
+    >
+      Save
+    </button>
   </div>
 </form>

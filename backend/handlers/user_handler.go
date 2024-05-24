@@ -65,7 +65,17 @@ func getUserByID(db *sql.DB, id int) (User, error) {
 	}
 	return user, nil
 }
+
 func createUser(db *sql.DB, user *User) error {
+	var existingUser User
+	err := db.QueryRow("SELECT id FROM users WHERE username = $1 OR email = $2", user.Username, user.Email).Scan(&existingUser.ID)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if existingUser.ID != 0 {
+		return errors.New("username_or_email_exists")
+	}
+
 	queryBuilder := squirrel.Insert("users").Columns("username", "email").Values(user.Username, user.Email).Suffix("RETURNING id, created_at, updated_at")
 	sql, args, err := queryBuilder.ToSql()
 	if err != nil {
@@ -78,7 +88,17 @@ func createUser(db *sql.DB, user *User) error {
 	}
 	return nil
 }
+
 func updateUser(db *sql.DB, id int, user *User) error {
+	var existingUser User
+	err := db.QueryRow("SELECT id FROM users WHERE (username = $1 OR email = $2) AND id != $3", user.Username, user.Email, id).Scan(&existingUser.ID)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if existingUser.ID != 0 {
+		return errors.New("username_or_email_exists")
+	}
+
 	queryBuilder := squirrel.Update("users").Set("username", user.Username).Set("email", user.Email).Where(squirrel.Eq{"id": id}).Suffix("RETURNING updated_at")
 	sql, args, err := queryBuilder.ToSql()
 	if err != nil {
@@ -91,6 +111,7 @@ func updateUser(db *sql.DB, id int, user *User) error {
 	}
 	return nil
 }
+
 func deleteUser(db *sql.DB, id int) error {
 	queryBuilder := squirrel.Delete("users").Where(squirrel.Eq{"id": id})
 	sql, args, err := queryBuilder.ToSql()
@@ -137,18 +158,21 @@ func (h *UserHandler) CreateUser(c echo.Context) error {
 	var user User
 	if err := c.Bind(&user); err != nil {
 		log.Printf("Error binding user data: %v", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid request payload"})
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "invalid_request_payload"})
 	}
 
 	if err := c.Validate(user); err != nil {
 		log.Printf("Validation error for user: %v, error: %v", user, err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "validation_failed", "details": err.Error()})
 	}
 
 	err := createUser(h.DB, &user)
 	if err != nil {
+		if err.Error() == "username_or_email_exists" {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "username_or_email_exists"})
+		}
 		log.Printf("Error creating user in database: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to create user"})
+		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "failed_to_create_user"})
 	}
 	return c.JSON(http.StatusCreated, user)
 }
@@ -157,28 +181,31 @@ func (h *UserHandler) UpdateUser(c echo.Context) error {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		log.Printf("Error converting user ID to integer: %v", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "invalid_user_id"})
 	}
 
 	var user User
 	if err := c.Bind(&user); err != nil {
 		log.Printf("Error binding user data: %v", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid request payload"})
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "invalid_request_payload"})
 	}
 
 	if err := c.Validate(user); err != nil {
 		log.Printf("Validation error for user: %v, error: %v", user, err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "validation_failed", "details": err.Error()})
 	}
 
 	err = updateUser(h.DB, id, &user)
 	if err != nil {
 		if errors.Is(err, ErrNoRowsAffected) {
 			log.Printf("No user found with ID %d to update", id)
-			return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
+			return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "user_not_found"})
+		}
+		if err.Error() == "username_or_email_exists" {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "username_or_email_exists"})
 		}
 		log.Printf("Error updating user with ID %d: %v", id, err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to update user"})
+		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "failed_to_update_user"})
 	}
 	return c.JSON(http.StatusOK, user)
 }
