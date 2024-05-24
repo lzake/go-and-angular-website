@@ -9,7 +9,11 @@ This project showcases a user management system built with Go for the backend an
 - **User Creation**: Add new users with unique usernames and emails.
 - **User Editing**: Update existing user details.
 - **User Deletion**: Remove users from the system.
-- **Pagination and Sorting**: Efficiently navigate and organize user data, assuming you get over 10 total.
+
+## Branches with different features**: 
+- `main` uses standard sql
+- `squirrel_backend` uses Masterminds/squirrel for Data Access
+- `swagger` is a swagger doc implementation
 
 ## Getting Started
 
