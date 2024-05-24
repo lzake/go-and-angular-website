@@ -1,0 +1,13 @@
+{
+  "database": {
+    "host": "localhost",
+    "user": "postgres",
+    "password": "admin",
+    "dbname": "lzake_temp_website",
+    "port": 5432,
+    "sslmode": "disable"
+  },
+  "app": {
+    "timezone": "America/New_York"
+  }
+}
