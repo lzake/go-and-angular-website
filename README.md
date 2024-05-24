@@ -18,6 +18,12 @@ This project showcases a user management system built with Go for the backend an
 - [Go](https://golang.org/doc/install)
 - [Node.js](https://nodejs.org/)
 - [Angular CLI](https://angular.io/cli)
+  - other libraries:
+    - Material components - https://material.angular.io/
+    - Angular testing: Jasmine and Karma
+    - Echo as web framework - https://echo.labstack.com/
+    - Data access - https://github.com/Masterminds/squirrel
+    - Go testing Ginkgo and Gomega
 
 ### Backend
 
