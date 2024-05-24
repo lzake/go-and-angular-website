@@ -1,7 +1,6 @@
 import { Component } from '@angular/core';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
-import { MatDialogRef } from '@angular/material/dialog'; 
-import { User } from '../user';
+import { MatDialogRef } from '@angular/material/dialog';
 import { UserService } from '../user.service'; 
 
 @Component({
@@ -31,11 +30,7 @@ export class UserCreateComponent {
           this.dialogRef.close(createdUser); 
         },
         error: (err) => {
-          if (err.error && err.error.error === 'username_or_email_exists') {
-            this.errorMessage = 'Username or email already exists. Please choose another one.';
-          } else {
-            this.errorMessage = 'An unexpected error occurred. Please try again later.';
-          }
+          this.errorMessage = err.message; 
         }
       });
     } else {

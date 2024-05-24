@@ -33,13 +33,7 @@ export class UserEditComponent {
           this.dialogRef.close(updatedUser);
         },
         error: (err) => {
-          console.log('test 1')
-          console.log(err)
-          if (err.error && err.error.error === 'username_or_email_exists') {
-            this.errorMessage = 'Username or email already exists. Please choose another one.';
-          } else {
-            this.errorMessage = 'An unexpected error occurred. Please try again later.';
-          }
+          this.errorMessage = err.message; 
         }
       });
     } else {
