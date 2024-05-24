@@ -36,9 +36,7 @@ export class UserService {
 
   updateUser(user: User): Observable<User> {
     const url = `${this.apiUrl}/${user.id}`;
-    return this.http.put<User>(url, user).pipe(
-      catchError(this.handleError)
-    );
+    return this.http.put<User>(url, user);
   }
 
   deleteUser(id: number): Observable<unknown> {
