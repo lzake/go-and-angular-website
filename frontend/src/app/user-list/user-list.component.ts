@@ -13,7 +13,7 @@ import { UserDeleteComponent } from '../user-delete/user-delete.component';
 })
 export class UserListComponent implements OnInit {
   users: User[] = [];
-  displayedColumns: string[] = ['ID', 'username', 'email', 'actions'];
+  displayedColumns: string[] = ['id', 'username', 'email', 'actions'];
 
   constructor(
     public dialog: MatDialog,

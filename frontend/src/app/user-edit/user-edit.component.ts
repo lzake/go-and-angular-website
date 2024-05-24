@@ -17,7 +17,7 @@ export class UserEditComponent {
     private fb: FormBuilder
   ) {
     this.userForm = this.fb.group({
-      id: [data.ID], 
+      id: [data.id], 
       username: [data.username, Validators.required],
       email: [data.email, [Validators.required, Validators.email]]
     });

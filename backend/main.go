@@ -1,7 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -9,12 +11,18 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Masterminds/squirrel"
 	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	_ "github.com/lib/pq"
 )
+
+var statementBuilder = squirrel.StatementBuilder
+
+func init() {
+	statementBuilder = statementBuilder.PlaceholderFormat(squirrel.Dollar)
+}
 
 type Config struct {
 	Database struct {
@@ -30,8 +38,15 @@ type Config struct {
 	} `json:"app"`
 }
 
-func readConfig(filename string) (*Config, error) {
+type User struct {
+	ID        int       `json:"id"`
+	Username  string    `json:"username"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
+func readConfig(filename string) (*Config, error) {
 	file, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read configuration file: %w", err)
@@ -46,10 +61,117 @@ func readConfig(filename string) (*Config, error) {
 	return &config, nil
 }
 
-type User struct {
-	gorm.Model
-	Username string `json:"username" gorm:"unique;not null" validate:"required"`
-	Email    string `json:"email" gorm:"unique;not null" validate:"required,email"`
+func getUsers(db *sql.DB) ([]User, error) {
+	queryBuilder := squirrel.Select("id", "username", "email", "created_at", "updated_at").From("users")
+	sql, args, err := queryBuilder.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
+func getUserByID(db *sql.DB, id int) (User, error) {
+	var user User
+	queryBuilder := squirrel.Select("id", "username", "email", "created_at", "updated_at").From("users").Where(squirrel.Eq{"id": id})
+	sql, args, err := queryBuilder.ToSql()
+	if err != nil {
+		return user, err
+	}
+
+	err = db.QueryRow(sql, args...).Scan(&user.ID, &user.Username, &user.Email, &user.CreatedAt, &user.UpdatedAt)
+	return user, err
+}
+
+func createUser(db *sql.DB, user *User) error {
+	queryBuilder := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
+		Insert("users").
+		Columns("username", "email").
+		Values(user.Username, user.Email).
+		Suffix("RETURNING id, created_at, updated_at")
+
+	sql, args, err := queryBuilder.ToSql()
+	if err != nil {
+		log.Printf("Error building SQL for createUser: %s, error: %v", sql, err)
+		return err
+	}
+
+	err = db.QueryRow(sql, args...).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		log.Printf("Error executing createUser: %s, args: %v, error: %v", sql, args, err)
+		return err
+	}
+	return nil
+}
+
+func updateUser(db *sql.DB, id int, user *User) error {
+	queryBuilder := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
+		Update("users").
+		Set("username", user.Username).
+		Set("email", user.Email).
+		Where(squirrel.Eq{"id": id}).
+		Suffix("RETURNING updated_at")
+
+	sql, args, err := queryBuilder.ToSql()
+	if err != nil {
+		log.Printf("Error building SQL for updateUser: %s, error: %v", sql, err)
+		return err
+	}
+
+	log.Printf("Executing updateUser: %s, args: %v", sql, args)
+
+	err = db.QueryRow(sql, args...).Scan(&user.UpdatedAt)
+	if err != nil {
+		log.Printf("Error executing updateUser: %s, args: %v, error: %v", sql, args, err)
+		return err
+	}
+
+	log.Printf("User updated successfully with ID: %d, updated_at: %v", id, user.UpdatedAt)
+
+	return nil
+}
+
+func deleteUser(db *sql.DB, id int) error {
+	queryBuilder := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
+		Delete("users").
+		Where(squirrel.Eq{"id": id})
+	sql, args, err := queryBuilder.ToSql()
+	if err != nil {
+		log.Printf("Error building SQL for deleteUser: %s, error: %v", sql, err)
+		return err
+	}
+
+	result, err := db.Exec(sql, args...)
+	if err != nil {
+		log.Printf("Error executing deleteUser: %s, args: %v, error: %v", sql, args, err)
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error fetching rows affected after deleteUser: %v", err)
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return errors.New("user not found") // Return a custom error
+	}
+
+	return nil
 }
 
 type CustomValidator struct {
@@ -60,100 +182,20 @@ func (cv *CustomValidator) Validate(i interface{}) error {
 	return cv.validator.Struct(i)
 }
 
-type UserHandler struct {
-	DB *gorm.DB
-}
-
-func NewUserHandler(db *gorm.DB) *UserHandler {
-	return &UserHandler{DB: db}
-}
-
-func (h *UserHandler) GetUsers(c echo.Context) error {
-	var users []User
-	result := h.DB.Find(&users)
-	if result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to retrieve users from the database"})
-	}
-	return c.JSON(http.StatusOK, users)
-}
-
-func (h *UserHandler) GetUserByID(c echo.Context) error {
-	id, err := strconv.Atoi(c.Param("id"))
+func dbConnect(cfg *Config) (*sql.DB, error) {
+	psqlInfo := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
+		cfg.Database.Host,
+		cfg.Database.User,
+		cfg.Database.Password,
+		cfg.Database.DBName,
+		cfg.Database.Port,
+		cfg.Database.SSLMode,
+	)
+	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
+		return nil, err
 	}
-
-	var user User
-	result := h.DB.First(&user, id)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
-		}
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to retrieve user from the database"})
-	}
-
-	return c.JSON(http.StatusOK, user)
-}
-
-func (h *UserHandler) CreateUser(c echo.Context) error {
-	var user User
-	if err := c.Bind(&user); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid request payload"})
-	}
-
-	if err := c.Validate(user); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
-	}
-
-	result := h.DB.Create(&user)
-	if result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to create user in the database"})
-	}
-
-	return c.JSON(http.StatusCreated, user)
-}
-
-func (h *UserHandler) UpdateUser(c echo.Context) error {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
-	}
-
-	var user User
-	if err := c.Bind(&user); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid request payload"})
-	}
-
-	if err := c.Validate(user); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
-	}
-
-	result := h.DB.Model(&User{}).Where("id = ?", id).Updates(user)
-	if result.RowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
-	}
-	if result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to update user in the database"})
-	}
-
-	return c.JSON(http.StatusOK, user)
-}
-
-func (h *UserHandler) DeleteUser(c echo.Context) error {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
-	}
-
-	result := h.DB.Delete(&User{}, id)
-	if result.RowsAffected == 0 {
-		return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
-	}
-	if result.Error != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to delete user from the database"})
-	}
-
-	return c.NoContent(http.StatusNoContent)
+	return db, db.Ping()
 }
 
 func main() {
@@ -168,24 +210,12 @@ func main() {
 	}
 	time.Local = location
 
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
-		config.Database.Host,
-		config.Database.User,
-		config.Database.Password,
-		config.Database.DBName,
-		config.Database.Port,
-		config.Database.SSLMode,
-	)
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := dbConnect(config)
 	if err != nil {
-		log.Fatalf("Failed to connect to the database: %v", err)
+		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	db.AutoMigrate(&User{})
-
 	e := echo.New()
-
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"http://localhost:4200"},
 		AllowMethods: []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete},
@@ -193,12 +223,80 @@ func main() {
 
 	e.Validator = &CustomValidator{validator: validator.New()}
 
-	userHandler := NewUserHandler(db)
-	e.GET("/users", userHandler.GetUsers)
-	e.GET("/users/:id", userHandler.GetUserByID)
-	e.POST("/users", userHandler.CreateUser)
-	e.PUT("/users/:id", userHandler.UpdateUser)
-	e.DELETE("/users/:id", userHandler.DeleteUser)
+	e.GET("/users", func(c echo.Context) error {
+		users, err := getUsers(db)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to retrieve users"})
+		}
+		return c.JSON(http.StatusOK, users)
+	})
+
+	e.GET("/users/:id", func(c echo.Context) error {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
+		}
+		user, err := getUserByID(db, id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
+			}
+			return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to retrieve user"})
+		}
+		return c.JSON(http.StatusOK, user)
+	})
+
+	e.POST("/users", func(c echo.Context) error {
+		var user User
+		if err := c.Bind(&user); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid request payload"})
+		}
+		if err := c.Validate(user); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		}
+		err := createUser(db, &user)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to create user"})
+		}
+		return c.JSON(http.StatusCreated, user)
+	})
+
+	e.PUT("/users/:id", func(c echo.Context) error {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
+		}
+		var user User
+		if err := c.Bind(&user); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid request payload"})
+		}
+		if err := c.Validate(user); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		}
+		err = updateUser(db, id, &user)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
+			}
+			return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to update user"})
+		}
+		return c.JSON(http.StatusOK, user)
+	})
+
+	e.DELETE("/users/:id", func(c echo.Context) error {
+		id, err := strconv.Atoi(c.Param("id"))
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{"error": "Invalid user ID"})
+		}
+		err = deleteUser(db, id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return c.JSON(http.StatusNotFound, map[string]interface{}{"error": "User not found"})
+			}
+			return c.JSON(http.StatusInternalServerError, map[string]interface{}{"error": "Failed to delete user"})
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
 
 	e.Logger.Fatal(e.Start(":8080"))
 }
