@@ -68,7 +68,7 @@ var _ = ginkgo.BeforeSuite(func() {
 		AllowMethods: []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete},
 	}))
 	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.App.RateLimit))))
-	e.Logger.SetLevel(0) // set logging level for tests
+	e.Logger.SetLevel(0)
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
 })
 
