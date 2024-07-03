@@ -2,12 +2,14 @@
   "database": {
     "host": "localhost",
     "user": "postgres",
-    "password": "admin",
+    "password": "admin", // its a local password in a deleted database so this shouldnt be considered insecure lol
     "dbname": "lzake_temp_website",
     "port": 5432,
     "sslmode": "disable"
   },
   "app": {
-    "timezone": "America/New_York"
+    "timezone": "America/New_York",
+    "log_level": "DEBUG",
+    "rate_limit": 100
   }
 }

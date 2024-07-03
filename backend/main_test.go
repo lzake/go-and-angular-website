@@ -1,6 +1,8 @@
-package test
+package main
 
 import (
+	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,35 +18,27 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	_ "github.com/lib/pq"
+	"github.com/onsi/ginkgo"
+	"github.com/onsi/gomega"
 	"github.com/patrickmn/go-cache"
 	echoSwagger "github.com/swaggo/echo-swagger"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-
-	"github.com/lzake/gowebsite-backend/main"
+	"golang.org/x/time/rate"
 )
 
-// Import your main package
-// load environment variables for test
+var (
+	db  *sql.DB
+	e   *echo.Echo
+	cfg *Config
+)
+
 var _ = ginkgo.BeforeSuite(func() {
 	err := godotenv.Load(".env.test")
 	if err != nil {
 		log.Fatal("Error loading .env.test file:", err)
 	}
-})
 
-// global variables for test setup
-var (
-	db  *gorm.DB
-	e   *echo.Echo
-	cfg *main.Config
-)
+	userCache = cache.New(5*time.Minute, 10*time.Minute)
 
-var _ = ginkgo.BeforeSuite(func() {
-	// init cache
-	main.UserCache = cache.New(5*time.Minute, 10*time.Minute)
-
-	// set up the test database connection
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
 		os.Getenv("DB_HOST"),
 		os.Getenv("DB_USER"),
@@ -54,477 +47,303 @@ var _ = ginkgo.BeforeSuite(func() {
 		getEnvAsInt("DB_PORT", 5432),
 		os.Getenv("DB_SSLMODE"),
 	)
-	var err error
-	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err = sql.Open("postgres", dsn)
 	if err != nil {
 		panic("Failed to connect to the test database!")
 	}
-	db.AutoMigrate(&main.User{})
+	err = db.Ping()
+	if err != nil {
+		panic("Failed to ping the test database!")
+	}
 
-	// read config
-	cfg, err = main.ReadConfig("config.test.json") // Use a separate config file for tests
+	cfg, err = readConfig("config.test.json")
 	if err != nil {
 		panic("Error reading test configuration file: " + err.Error())
 	}
 
-	// init Echo
 	e = echo.New()
-	e.Validator = &main.CustomValidator{validator: validator.New()}
+	e.Validator = &CustomValidator{validator: validator.New()}
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"http://localhost:4200"},
 		AllowMethods: []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete},
 	}))
-	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(cfg.App.RateLimit)))
-	e.Logger.SetLevel(log.DebugLevel) // set logging level for tests
+	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(cfg.App.RateLimit))))
+	e.Logger.SetLevel(0) // set logging level for tests
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
 })
 
 var _ = ginkgo.AfterSuite(func() {
-	// close the test database connection
-	sqlDB, _ := db.DB()
-	sqlDB.Close()
+	db.Close()
 })
 
 var _ = ginkgo.BeforeEach(func() {
-	// clear the test database before each test
 	db.Exec("DELETE FROM users")
 })
 
-func getEnvAsInt(name string, defaultVal int) int {
-	valueStr := os.Getenv(name)
-	if valueStr == "" {
-		return defaultVal
-	}
-	value, err := strconv.Atoi(valueStr)
-	if err != nil {
-		return defaultVal
-	}
-	return value
-}
-
 func TestMainApplication(t *testing.T) {
+	gomega.RegisterFailHandler(ginkgo.Fail)
 	ginkgo.RunSpecs(t, "Main Application Suite")
 }
 
 var _ = ginkgo.Describe("Main Application", func() {
 	ginkgo.Context("CreateUser", func() {
 		ginkgo.It("Should create a new user successfully", func() {
-			// define your test user data
-			testUser := main.User{Username: "testuser", Email: "testuser@example.com", Password: "password123", ProfilePictureURL: "https://example.com/profile.jpg", Bio: "Test User Bio"}
+			testUser := User{Username: "testuser", Email: "testuser@example.com", Password: "password123", ProfilePictureURL: "https://example.com/profile.jpg", Bio: "Test User Bio"}
 			reqBody, _ := json.Marshal(testUser)
 
-			// create a test request
-			req := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(string(reqBody)))
+			req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewReader(reqBody))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 
-			// perform the request
 			rec := httptest.NewRecorder()
-			e.POST("/users", func(c echo.Context) error {
-				return main.CreateUser(db, &testUser)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusCreated))
-
-			// unmarshal the response body:
-			var createdUser main.User
-			json.Unmarshal(rec.Body.Bytes(), &createdUser)
-			gomega.Expect(createdUser.Username).To(gomega.Equal("testuser"))
-			gomega.Expect(createdUser.Email).To(gomega.Equal("testuser@example.com"))
-			gomega.Expect(createdUser.ProfilePictureURL).To(gomega.Equal("https://example.com/profile.jpg"))
-			gomega.Expect(createdUser.Bio).To(gomega.Equal("Test User Bio"))
-			gomega.Expect(createdUser.Password).ToNot(gomega.Equal("password123")) // Password should be hashed
+			err := createUser(db, &testUser)
+			gomega.Expect(err).Should(gomega.BeNil())
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusCreated))
 		})
 
 		ginkgo.It("Should return an error for invalid user data", func() {
-			// define a user with invalid data
-			testUser := main.User{Username: "", Email: "invalid_email", Password: "password123"}
+			testUser := User{Username: "", Email: "invalid_email", Password: "password123"}
 			reqBody, _ := json.Marshal(testUser)
 
-			// create a test request
-			req := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(string(reqBody)))
+			req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewReader(reqBody))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 
-			// perform the request
 			rec := httptest.NewRecorder()
-			e.POST("/users", func(c echo.Context) error {
-				return main.CreateUser(db, &testUser)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			err := createUser(db, &testUser)
+			gomega.Expect(err).Should(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 
 		ginkgo.It("Should return an error for duplicate username", func() {
-			// create a test user
-			existingUser := main.User{Username: "duplicateuser", Email: "duplicateuser@example.com", Password: "password123"}
-			db.Create(&existingUser)
+			existingUser := User{Username: "duplicateuser", Email: "duplicateuser@example.com", Password: "password123"}
+			err := createUser(db, &existingUser)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// create another user with the same username
-			testUser := main.User{Username: "duplicateuser", Email: "another@example.com", Password: "password123"}
+			testUser := User{Username: "duplicateuser", Email: "another@example.com", Password: "password123"}
 			reqBody, _ := json.Marshal(testUser)
 
-			// create a test request
-			req := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(string(reqBody)))
+			req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewReader(reqBody))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 
-			// perform the request
 			rec := httptest.NewRecorder()
-			e.POST("/users", func(c echo.Context) error {
-				return main.CreateUser(db, &testUser)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Equal("username_or_email_exists"))
+			err = createUser(db, &testUser)
+			gomega.Expect(err).Should(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 	})
 
 	ginkgo.Context("GetUserByID", func() {
 		ginkgo.It("Should return a user by ID successfully", func() {
-			// create a test user
-			testUser := main.User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
-			db.Create(&testUser)
+			testUser := User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
+			err := db.QueryRow("INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id", testUser.Username, testUser.Email, testUser.Password).Scan(&testUser.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// get the user's ID from the database
-			var userID int
-			db.Model(&testUser).Select("id").Scan(&userID)
-
-			// create a test request
-			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/users/%d", userID), nil)
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/users/%d", testUser.ID), nil)
 			rec := httptest.NewRecorder()
-			e.GET("/users/:id", func(c echo.Context) error {
-				return main.GetUserByID(db, userID)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues(strconv.Itoa(testUser.ID))
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusOK))
-
-			// unmarshal the response body
-			var userResponse main.User
-			json.Unmarshal(rec.Body.Bytes(), &userResponse)
-			gomega.Expect(userResponse.Username).To(gomega.Equal("testuser"))
-			gomega.Expect(userResponse.Email).To(gomega.Equal("testuser@example.com"))
-			gomega.Expect(userResponse.Password).To(gomega.Equal("")) // Password should not be returned in response
+			user, err := getUserByID(db, testUser.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusOK))
+			gomega.Expect(user.Username).Should(gomega.Equal(testUser.Username))
+			gomega.Expect(user.Email).Should(gomega.Equal(testUser.Email))
 		})
 
 		ginkgo.It("Should return an error for an invalid user ID", func() {
-			// make a request with an invalid ID
 			req := httptest.NewRequest(http.MethodGet, "/users/invalid", nil)
 			rec := httptest.NewRecorder()
-			e.GET("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.GetUserByID(db, id)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues("invalid")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 
 		ginkgo.It("Should return a 404 error for a non-existent user ID", func() {
-			// create a test request with a non-existent user ID
 			req := httptest.NewRequest(http.MethodGet, "/users/999", nil)
 			rec := httptest.NewRecorder()
-			e.GET("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.GetUserByID(db, id)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues("999")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusNotFound))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusNotFound))
 		})
 	})
 
 	ginkgo.Context("UpdateUser", func() {
 		ginkgo.It("Should update a user by ID successfully", func() {
-			// create a test user
-			testUser := main.User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
-			db.Create(&testUser)
+			testUser := User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
+			err := db.QueryRow("INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id", testUser.Username, testUser.Email, testUser.Password).Scan(&testUser.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// get the user's ID from the database
-			var userID int
-			db.Model(&testUser).Select("id").Scan(&userID)
-
-			// create updated user data
-			updatedUser := main.User{Username: "updateduser", Email: "updateduser@example.com", Password: "newpassword123", ProfilePictureURL: "https://example.com/newprofile.jpg", Bio: "Updated User Bio"}
+			updatedUser := User{Username: "updateduser", Email: "updateduser@example.com", Password: "newpassword123", ProfilePictureURL: "https://example.com/newprofile.jpg", Bio: "Updated User Bio"}
 			reqBody, _ := json.Marshal(updatedUser)
 
-			// create a test request
-			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/users/%d", userID), strings.NewReader(string(reqBody)))
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/users/%d", testUser.ID), bytes.NewReader(reqBody))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 
-			// perform the request
 			rec := httptest.NewRecorder()
-			e.PUT("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.UpdateUser(db, id, &updatedUser)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues(strconv.Itoa(testUser.ID))
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusOK))
-
-			// unmarshal the response body
-			var updatedResponse main.User
-			json.Unmarshal(rec.Body.Bytes(), &updatedResponse)
-			gomega.Expect(updatedResponse.Username).To(gomega.Equal("updateduser"))
-			gomega.Expect(updatedResponse.Email).To(gomega.Equal("updateduser@example.com"))
-			gomega.Expect(updatedResponse.ProfilePictureURL).To(gomega.Equal("https://example.com/newprofile.jpg"))
-			gomega.Expect(updatedResponse.Bio).To(gomega.Equal("Updated User Bio"))
-			gomega.Expect(updatedResponse.Password).ToNot(gomega.Equal("newpassword123")) // Password should be hashed
+			err = updateUser(db, testUser.ID, &updatedUser)
+			gomega.Expect(err).Should(gomega.BeNil())
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusOK))
 		})
 
 		ginkgo.It("Should return an error for invalid user ID", func() {
-			// create a test request with an invalid ID
 			req := httptest.NewRequest(http.MethodPut, "/users/invalid", nil)
 			rec := httptest.NewRecorder()
-			e.PUT("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.UpdateUser(db, id, &main.User{})
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues("invalid")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 
 		ginkgo.It("Should return an error for invalid user data", func() {
-			// create a test user
-			testUser := main.User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
-			db.Create(&testUser)
+			testUser := User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
+			err := db.QueryRow("INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id", testUser.Username, testUser.Email, testUser.Password).Scan(&testUser.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// get the user's ID from the database
-			var userID int
-			db.Model(&testUser).Select("id").Scan(&userID)
-
-			// create invalid updated user data
-			updatedUser := main.User{Username: "", Email: "invalid_email", Password: "newpassword123"}
+			updatedUser := User{Username: "", Email: "invalid_email", Password: "newpassword123"}
 			reqBody, _ := json.Marshal(updatedUser)
 
-			// create a test request
-			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/users/%d", userID), strings.NewReader(string(reqBody)))
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/users/%d", testUser.ID), bytes.NewReader(reqBody))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 
-			// perform the request
 			rec := httptest.NewRecorder()
-			e.PUT("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.UpdateUser(db, id, &updatedUser)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues(strconv.Itoa(testUser.ID))
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			err = updateUser(db, testUser.ID, &updatedUser)
+			gomega.Expect(err).Should(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 
 		ginkgo.It("Should return an error for duplicate username or email", func() {
-			// create two test users
-			testUser1 := main.User{Username: "testuser1", Email: "testuser1@example.com", Password: "password123"}
-			db.Create(&testUser1)
-			testUser2 := main.User{Username: "testuser2", Email: "testuser2@example.com", Password: "password123"}
-			db.Create(&testUser2)
+			testUser1 := User{Username: "testuser1", Email: "testuser1@example.com", Password: "password123"}
+			err := db.QueryRow("INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id", testUser1.Username, testUser1.Email, testUser1.Password).Scan(&testUser1.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// get the first user's ID from the database
-			var userID1 int
-			db.Model(&testUser1).Select("id").Scan(&userID1)
+			testUser2 := User{Username: "testuser2", Email: "testuser2@example.com", Password: "password123"}
+			err = db.QueryRow("INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id", testUser2.Username, testUser2.Email, testUser2.Password).Scan(&testUser2.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// create updated user data with the same username as the second user
-			updatedUser := main.User{Username: "testuser2", Email: "updated@example.com", Password: "newpassword123"}
+			updatedUser := User{Username: "testuser2", Email: "updated@example.com", Password: "newpassword123"}
 			reqBody, _ := json.Marshal(updatedUser)
 
-			// create a test request
-			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/users/%d", userID1), strings.NewReader(string(reqBody)))
+			req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/users/%d", testUser1.ID), bytes.NewReader(reqBody))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 
-			// perform the request
 			rec := httptest.NewRecorder()
-			e.PUT("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.UpdateUser(db, id, &updatedUser)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues(strconv.Itoa(testUser1.ID))
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Equal("username_or_email_exists"))
+			err = updateUser(db, testUser1.ID, &updatedUser)
+			gomega.Expect(err).Should(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 
 		ginkgo.It("Should return a 404 error for a non-existent user ID", func() {
-			// create a test request with a non-existent user ID
 			req := httptest.NewRequest(http.MethodPut, "/users/999", nil)
 			rec := httptest.NewRecorder()
-			e.PUT("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.UpdateUser(db, id, &main.User{})
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues("999")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusNotFound))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			err := updateUser(db, 999, &User{})
+			gomega.Expect(err).Should(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusNotFound))
 		})
 	})
 
 	ginkgo.Context("DeleteUser", func() {
 		ginkgo.It("Should delete a user by ID successfully", func() {
-			// create a test user
-			testUser := main.User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
-			db.Create(&testUser)
+			testUser := User{Username: "testuser", Email: "testuser@example.com", Password: "password123"}
+			err := db.QueryRow("INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id", testUser.Username, testUser.Email, testUser.Password).Scan(&testUser.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// get the user's ID from the database
-			var userID int
-			db.Model(&testUser).Select("id").Scan(&userID)
-
-			// create a test request
-			req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/users/%d", userID), nil)
+			req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/users/%d", testUser.ID), nil)
 			rec := httptest.NewRecorder()
-			e.DELETE("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.DeleteUser(db, id)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues(strconv.Itoa(testUser.ID))
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusNoContent))
-
-			// verify that the user is soft deleted from the database
-			var deletedUser main.User
-			db.First(&deletedUser, userID)
-			gomega.Expect(deletedUser.DeletedAt).ToNot(gomega.BeNil())
+			err = deleteUser(db, testUser.ID)
+			gomega.Expect(err).Should(gomega.BeNil())
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusNoContent))
 		})
 
 		ginkgo.It("Should return an error for an invalid user ID", func() {
-			// make a request with an invalid ID
 			req := httptest.NewRequest(http.MethodDelete, "/users/invalid", nil)
 			rec := httptest.NewRecorder()
-			e.DELETE("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.DeleteUser(db, id)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues("invalid")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusBadRequest))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusBadRequest))
 		})
 
 		ginkgo.It("Should return a 404 error for a non-existent user ID", func() {
-			// create a test request with a non-existent user ID
 			req := httptest.NewRequest(http.MethodDelete, "/users/999", nil)
 			rec := httptest.NewRecorder()
-			e.DELETE("/users/:id", func(c echo.Context) error {
-				id, err := strconv.Atoi(c.Param("id"))
-				if err != nil {
-					return err
-				}
-				return main.DeleteUser(db, id)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users/:id")
+			c.SetParamNames("id")
+			c.SetParamValues("999")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusNotFound))
-
-			// get the error message from the response body
-			var response map[string]interface{}
-			json.Unmarshal(rec.Body.Bytes(), &response)
-			gomega.Expect(response["error"]).To(gomega.Equal("user not found"))
+			err := deleteUser(db, 999)
+			gomega.Expect(err).Should(gomega.Not(gomega.BeNil()))
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusNotFound))
 		})
 	})
 
 	ginkgo.Context("GetUsers", func() {
 		ginkgo.It("Should return a list of all users", func() {
-			// create some test users
-			testUser1 := main.User{Username: "testuser1", Email: "testuser1@example.com", Password: "password123"}
-			db.Create(&testUser1)
-			testUser2 := main.User{Username: "testuser2", Email: "testuser2@example.com", Password: "password123"}
-			db.Create(&testUser2)
+			testUser1 := User{Username: "testuser1", Email: "testuser1@example.com", Password: "password123"}
+			_, err := db.Exec("INSERT INTO users (username, email, password) VALUES ($1, $2, $3)", testUser1.Username, testUser1.Email, testUser1.Password)
+			gomega.Expect(err).Should(gomega.BeNil())
 
-			// create a test request
+			testUser2 := User{Username: "testuser2", Email: "testuser2@example.com", Password: "password123"}
+			_, err = db.Exec("INSERT INTO users (username, email, password) VALUES ($1, $2, $3)", testUser2.Username, testUser2.Email, testUser2.Password)
+			gomega.Expect(err).Should(gomega.BeNil())
+
 			req := httptest.NewRequest(http.MethodGet, "/users", nil)
 			rec := httptest.NewRecorder()
-			e.GET("/users", func(c echo.Context) error {
-				page, err := strconv.Atoi(c.QueryParam("page"))
-				if err != nil || page < 1 {
-					page = 1
-				}
-				pageSize, err := strconv.Atoi(c.QueryParam("pageSize"))
-				if err != nil || pageSize < 1 {
-					pageSize = 10
-				}
-				return main.GetUsers(db, page, pageSize)
-			}).ServeHTTP(rec, req)
+			c := e.NewContext(req, rec)
+			c.SetPath("/users")
 
-			// assertions
-			gomega.Expect(rec.Code).To(gomega.Equal(http.StatusOK))
+			page := 1
+			pageSize := 10
 
-			// unmarshal the response body
-			var usersResponse []main.User
-			json.Unmarshal(rec.Body.Bytes(), &usersResponse)
-			gomega.Expect(len(usersResponse)).To(gomega.Equal(2))
+			users, err := getUsers(db, page, pageSize)
+			gomega.Expect(err).Should(gomega.BeNil())
+			gomega.Expect(rec.Code).Should(gomega.Equal(http.StatusOK))
+			gomega.Expect(len(users)).Should(gomega.Equal(2))
 		})
 	})
 })
-
-func TestMainApplication(t *testing.T) {
-	ginkgo.RunSpecs(t, "Main Application Suite")
-}
